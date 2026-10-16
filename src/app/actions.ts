@@ -29,10 +29,8 @@ export async function getUploadPresignedUrl(
 
 // Define faixas de tamanho (em Megabytes) e suas respectivas máquinas
 const MACHINE_TIERS = [
-  { threshold: 3500, machine: "large-1x" }, // Acima de 3500MB -> 4GB RAM
-  { threshold: 1500, machine: "medium-2x" }, // Acima de 1500MB -> 4GB RAM
-  { threshold: 800, machine: "medium-1x" }, // Acima de 800MB -> 2GB RAM
-  { threshold: 0, machine: "small-2x" }, // Padrão até 800MB -> 1GB RAM
+  { threshold: 1500, machine: "large-1x" }, // Acima de 1500MB -> 8GB RAM
+  { threshold: 0, machine: "medium-1x" }, // Padrão até 1500MB -> 1GB RAM
 ] as const;
 
 export async function startConversionAction(params: {
