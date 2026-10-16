@@ -1,5 +1,5 @@
 // src/trigger/convert-video.ts
-import { task, metadata } from "@trigger.dev/sdk/v3";
+import { task, metadata, logger } from "@trigger.dev/sdk/v3";
 import {
   GetObjectCommand,
   PutObjectCommand,
@@ -8,32 +8,40 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { r2, R2_BUCKET } from "../lib/r2";
 import { spawn } from "child_process";
-import fs from "fs";
-import path from "path";
-import os from "os";
-import { Readable } from "stream";
-import { pipeline } from "stream/promises";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 interface ConvertPayload {
   fileKey: string;
   originalName: string;
-  crf: number; // 18 (Alta), 23 (Equilibrado), 28 (Ultra Leve)
+  crf: number;
   muteAudio: boolean;
   scale1080p: boolean;
 }
 
 export const convertVideoTask = task({
   id: "convert-video",
-  machine: { preset: "medium-1x" }, // 2 vCPU / 4GB RAM para o FFmpeg voar
   run: async (payload: ConvertPayload) => {
     const tmpDir = os.tmpdir();
     const inputPath = path.join(tmpDir, `in-${Date.now()}.mov`);
     const outputPath = path.join(tmpDir, `out-${Date.now()}.mp4`);
     const outputKey = payload.fileKey.replace(/\.[^/.]+\$/, "") + "-slim.mp4";
 
+    logger.info("Iniciando task de conversão de vídeo", {
+      originalName: payload.originalName,
+      fileKey: payload.fileKey,
+    });
+
     try {
       metadata.set("status", "Baixando do R2 para o worker...");
       metadata.set("progress", 5);
+      logger.info("Baixando arquivo do Cloudflare R2...", {
+        bucket: R2_BUCKET,
+        key: payload.fileKey,
+      });
 
       // 1. Baixar arquivo .MOV do R2 via stream
       const getObj = await r2.send(
@@ -44,8 +52,13 @@ export const convertVideoTask = task({
 
       const originalSize = fs.statSync(inputPath).size;
       metadata.set("originalSize", originalSize);
+      logger.info("Download concluído com sucesso", {
+        sizeMB: (originalSize / (1024 * 1024)).toFixed(2),
+      });
+
       metadata.set("status", "Comprimindo vídeo (FFmpeg)...");
       metadata.set("progress", 10);
+      logger.info("Preparando argumentos do FFmpeg", { crf: payload.crf });
 
       // 2. Montar argumentos otimizados do FFmpeg
       const args = [
@@ -57,15 +70,14 @@ export const convertVideoTask = task({
         "-crf",
         String(payload.crf),
         "-preset",
-        "faster", // Ótimo equilíbrio velocidade vs compressão
+        "faster",
         "-pix_fmt",
-        "yuv420p", // Garante compatibilidade em todos navegadores/players
+        "yuv420p",
         "-movflags",
-        "+faststart", // Começa a tocar na web instantaneamente
+        "+faststart",
       ];
 
       if (payload.scale1080p) {
-        // Reduz para no máximo 1080p de altura sem distorcer (mantém menor se já for menor)
         args.push("-vf", "scale=-2:'min(1080,ih)'");
       }
 
@@ -76,6 +88,7 @@ export const convertVideoTask = task({
       }
 
       args.push(outputPath);
+      logger.info("Executando processo FFmpeg", { args: args.join(" ") });
 
       // 3. Executar FFmpeg e extrair porcentagem em tempo real
       await new Promise<void>((resolve, reject) => {
@@ -95,10 +108,13 @@ export const convertVideoTask = task({
                 parseInt(durMatch[1]) * 3600 +
                 parseInt(durMatch[2]) * 60 +
                 parseFloat(durMatch[3]);
+              logger.info("Duração total do vídeo detectada", {
+                totalDurationSec,
+              });
             }
           }
 
-          // Captura tempo atual processado e atualiza metadata pro frontend
+          // Captura tempo atual processado
           const timeMatch = text.match(/time=(\d{2}):(\d{2}):(\d{2}\.\d{2})/);
           if (timeMatch && totalDurationSec > 0) {
             const currentSec =
@@ -114,8 +130,13 @@ export const convertVideoTask = task({
         });
 
         ffmpegProc.on("close", (code) => {
-          if (code === 0) resolve();
-          else reject(new Error(`FFmpeg falhou com código ${code}`));
+          if (code === 0) {
+            logger.info("FFmpeg finalizado com sucesso");
+            resolve();
+          } else {
+            logger.error("FFmpeg falhou", { code });
+            reject(new Error(`FFmpeg falhou com código ${code}`));
+          }
         });
       });
 
@@ -124,6 +145,11 @@ export const convertVideoTask = task({
       metadata.set("progress", 95);
 
       const finalSize = fs.statSync(outputPath).size;
+      logger.info("Fazendo upload do arquivo otimizado para o R2", {
+        sizeMB: (finalSize / (1024 * 1024)).toFixed(2),
+        economizouPct: Math.round((1 - finalSize / originalSize) * 100),
+      });
+
       const fileStream = fs.createReadStream(outputPath);
       const cleanDownloadName =
         payload.originalName.replace(/\.[^/.]+\$/, "") + ".mp4";
@@ -138,13 +164,16 @@ export const convertVideoTask = task({
         }),
       );
 
-      // 5. Gerar link de download válido por 24h e deletar o .MOV pesado original
+      // 5. Gerar link de download (7 dias) e deletar .MOV original
       const downloadUrl = await getSignedUrl(
         r2,
         new GetObjectCommand({ Bucket: R2_BUCKET, Key: outputKey }),
-        { expiresIn: 604800 }, // 7 dias (acompanhando a regra do R2)
+        { expiresIn: 604800 },
       );
 
+      logger.info(
+        "Removendo arquivo original .MOV do R2 para economizar espaço",
+      );
       await r2.send(
         new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: payload.fileKey }),
       );
@@ -154,16 +183,31 @@ export const convertVideoTask = task({
       metadata.set("finalSize", finalSize);
       metadata.set("downloadUrl", downloadUrl);
 
+      logger.info("Task de conversão finalizada com sucesso!", { outputKey });
+
       return {
         downloadUrl,
         originalSize,
         finalSize,
         savedPercentage: Math.round((1 - finalSize / originalSize) * 100),
       };
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error("Erro crítico na task convert-video", {
+        error: errorMessage,
+      });
+      metadata.set("status", "Erro na conversão");
+      throw err;
     } finally {
       // Limpa disco temporário do worker
-      if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+      if (fs.existsSync(inputPath)) {
+        fs.unlinkSync(inputPath);
+        logger.info("Arquivo temporário de entrada limpo do disco");
+      }
+      if (fs.existsSync(outputPath)) {
+        fs.unlinkSync(outputPath);
+        logger.info("Arquivo temporário de saída limpo do disco");
+      }
     }
   },
 });
