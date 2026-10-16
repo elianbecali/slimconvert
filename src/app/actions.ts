@@ -29,8 +29,8 @@ export async function getUploadPresignedUrl(
 
 // Define faixas de tamanho (em Megabytes) e suas respectivas máquinas
 const MACHINE_TIERS = [
-  { threshold: 1000, machine: "large-2x" }, // Acima de 1GB -> 8 vCPUs / 16GB RAM (Potência máxima para vídeos pesados)
-  { threshold: 0, machine: "medium-2x" }, // Até 1GB -> 2 vCPUs / 4GB RAM (Rápido e otimizado para ficheiros menores)
+  { threshold: 1000, machine: "large-2x" },
+  { threshold: 0, machine: "large-1x" },
 ] as const;
 
 export async function startConversionAction(params: {
@@ -41,7 +41,6 @@ export async function startConversionAction(params: {
   muteAudio: boolean;
   scale1080p: boolean;
 }) {
-  // A escolha vira uma busca limpa no array/objeto
   const fileSizeMB = params.fileSize / (1024 * 1024);
   const matchedTier = MACHINE_TIERS.find(
     (tier) => fileSizeMB >= tier.threshold,
@@ -58,7 +57,7 @@ export async function startConversionAction(params: {
       scale1080p: params.scale1080p,
     },
     {
-      machine: chosenMachine, // 👈 Aqui você injeta a máquina de forma dinâmica!
+      machine: chosenMachine,
     },
   );
 
