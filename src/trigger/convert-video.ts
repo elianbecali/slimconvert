@@ -70,25 +70,19 @@ export const convertVideoTask = task({
         "-crf",
         String(payload.crf),
         "-preset",
-        "faster",
+        "ultrafast", // Máxima velocidade de processamento
+        "-threads",
+        "0", // Usa todos os núcleos da CPU disponíveis
         "-pix_fmt",
         "yuv420p",
         "-movflags",
         "+faststart",
       ];
 
-      if (payload.scale1080p) {
-        args.push("-vf", "scale=-2:'min(1080,ih)'");
-      }
-
-      if (payload.muteAudio) {
-        args.push("-an");
-      } else {
-        args.push("-c:a", "aac", "-b:a", "128k");
-      }
-
       args.push(outputPath);
-      logger.info("Executando processo FFmpeg", { args: args.join(" ") });
+      logger.info("Executando processo FFmpeg (Resolução original mantida)", {
+        args: args.join(" "),
+      });
 
       // 3. Executar FFmpeg e extrair porcentagem em tempo real
       await new Promise<void>((resolve, reject) => {
