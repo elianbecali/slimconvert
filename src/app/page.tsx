@@ -213,14 +213,13 @@ export default function SlimConvertPage() {
   const [items, setItems] = useState<JobItem[]>([]);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Carrega e limpa itens expirados (+7 dias) do localStorage na inicialização
   useEffect(() => {
     const saved = localStorage.getItem("slimconvert_items");
     if (saved) {
       try {
         const parsed: JobItem[] = JSON.parse(saved);
         const now = Date.now();
-        // Filtra itens com menos de 7 dias
+
         const validItems = parsed.filter((item) => item.expiresAt > now);
         setItems(validItems);
         localStorage.setItem("slimconvert_items", JSON.stringify(validItems));
@@ -267,7 +266,7 @@ export default function SlimConvertPage() {
         status: "uploading",
         uploadProgress: 0,
         createdAt: now,
-        expiresAt: now + 7 * 24 * 60 * 60 * 1000, // 7 dias
+        expiresAt: now + 24 * 60 * 60 * 1000, // 24h
       };
 
       setItems((prev) => {

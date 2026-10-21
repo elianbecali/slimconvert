@@ -158,11 +158,10 @@ export const convertVideoTask = task({
         }),
       );
 
-      // 5. Gerar link de download (7 dias) e deletar .MOV original
       const downloadUrl = await getSignedUrl(
         r2,
         new GetObjectCommand({ Bucket: R2_BUCKET, Key: outputKey }),
-        { expiresIn: 604800 },
+        { expiresIn: 3600 },
       );
 
       logger.info(
